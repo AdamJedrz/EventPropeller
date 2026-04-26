@@ -1,0 +1,47 @@
+from dataclasses import dataclass, field
+from typing import Optional, Tuple
+
+
+@dataclass
+class PipelineConfig:
+    n_propellers: int = 2
+    chunk_size: int = 5_000_000
+    bundle_us: int = 2_000
+    bundles_per_window: int = 10
+    polarity_mode: str = "positive"
+    start_time_ms: float = 0.0
+    max_windows: Optional[int] = None
+    bin_size: int = 7
+    min_events_in_bin: int = 3
+    density_min_component_area: int = 18
+    remove_border_components: bool = True
+    mask_dilate_kernel_size: int = 5
+    mask_dilate_iterations: int = 1
+    mask_close_kernel_size: int = 9
+    mask_close_iterations: int = 1
+    mask_fill_holes: bool = True
+    mask_min_component_area_px: int = 3000
+    max_detection_components: int = 10
+    bootstrap_sort: str = "x"
+    max_centroid_dx_per_window: Optional[float] = 20.0
+    max_centroid_dy_per_window: Optional[float] = 20.0
+    max_centroid_distance_per_window: Optional[float] = None
+    rpm_abs_max: float = 8000
+    rpm_step_coarse: float = 200
+    rpm_step_fine: float = 20
+    rpm_refine_span: float = 200
+    rpm_local_delta: float = 150
+    full_search_period_us: int = 500_000
+    min_events_for_rpm: int = 50
+    max_events_mc: int = 3000
+    downsample_time_bins: int = 20
+    score_mode: str = "mean_square"
+    mc_score_lambda: float = 1.0
+    mc_score_eps: float = 1e-6
+    reference_time_fractions: Tuple[float, ...] = field(default_factory=lambda: (0.5,))
+    center_search_radius_px: float = 0.0
+    center_search_step_px: float = 1.0
+    preview: bool = False
+    preview_wait_ms: int = 1
+    preview_every_n_windows: int = 1
+    verbose_chunks: bool = False
