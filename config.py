@@ -35,6 +35,8 @@ class PipelineConfig:
     min_events_for_rpm: int = 50
     max_events_mc: int = 3000
     downsample_time_bins: int = 20
+    parallel_mc: bool = False
+    parallel_candidate_chunk_size: int = 512
     score_mode: str = "mean_square"
     mc_score_lambda: float = 1.0
     mc_score_eps: float = 1e-6

@@ -73,6 +73,12 @@ config = PipelineConfig(
     downsample_time_bins=20,         # Liczba koszyków czasowych przy downsamplingu.
 
     # ============================================================
+    # Backend motion compensation
+    # ============================================================
+    parallel_mc=True,               # False = sekwencyjnie NumPy CPU. True = równolegle na GPU przez PyTorch/CUDA, jeśli dostępne.
+    parallel_candidate_chunk_size=512, # Ile par RPM-środek liczyć naraz na GPU. Zmniejsz, jeśli brakuje VRAM.
+
+    # ============================================================
     # Funkcja celu
     # ============================================================
     score_mode="mean_square",        # "mean_square" = szybka, score=mean(H^2). "eventpro" = wolniejsza z exp().
@@ -87,8 +93,8 @@ config = PipelineConfig(
     # ============================================================
     # Opcjonalna optymalizacja środka obrotu
     # ============================================================
-    center_search_radius_px=0,     # 0 = wyłączone. Np. 5 szuka środka w promieniu 5 px.
-    center_search_step_px=20.0,       # Krok siatki środka. Duży promień i mały krok bardzo spowalnia.
+    center_search_radius_px=40.0,     # 0 = wyłączone. Np. 5 szuka środka w promieniu 5 px.
+    center_search_step_px=10.0,       # Krok siatki środka. Duży promień i mały krok bardzo spowalnia.
 
     # ============================================================
     # Podgląd / logowanie
@@ -148,6 +154,8 @@ def main():
     print(f"Start time: {config.start_time_ms} ms")
     print(f"Max windows: {config.max_windows}")
     print(f"Score mode: {config.score_mode}")
+    print(f"Parallel: {config.parallel_mc}")
+    print(f"Torch candidate chunk size: {config.parallel_candidate_chunk_size}")
     print(f"Reference fractions: {config.reference_time_fractions}")
     print(f"Max events MC: {config.max_events_mc}")
     print()

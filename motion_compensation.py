@@ -3,6 +3,16 @@ import numpy as np
 from polarity import select_events_by_polarity
 
 
+_PARALLEL_FALLBACK_WARNED = False
+
+
+def _warn_parallel_fallback(exc):
+    global _PARALLEL_FALLBACK_WARNED
+    if not _PARALLEL_FALLBACK_WARNED:
+        print(f"[WARN] parallel_mc=True, ale CUDA/PyTorch nie działa: {exc}")
+        _PARALLEL_FALLBACK_WARNED = True
+
+
 def crop_events_to_component_bbox(xs, ys, ps, ts, component):
     x0, y0 = component["bbox_x"], component["bbox_y"]
     x1 = x0 + component["bbox_w"]
@@ -207,6 +217,8 @@ def estimate_rpm_for_component_on_arrays(
     score_eps=1e-6,
     max_events_mc=3000,
     downsample_time_bins=20,
+    parallel_mc=False,
+    parallel_candidate_chunk_size=512,
     reference_time_fractions=(0.5,),
     center_search_radius_px=0.0,
     center_search_step_px=1.0,
@@ -233,6 +245,38 @@ def estimate_rpm_for_component_on_arrays(
     rpm_candidates = np.asarray(rpm_candidates, dtype=np.float64)
     if len(rpm_candidates) == 0:
         return _nan_estimate()
+
+    if parallel_mc:
+        try:
+            from motion_compensation_torch import estimate_rpm_for_component_on_arrays_torch
+
+            return estimate_rpm_for_component_on_arrays_torch(
+                xs=xs,
+                ys=ys,
+                ps=ps,
+                ts=ts,
+                t0_us=t0_us,
+                t1_us=t1_us,
+                component=component,
+                rpm_candidates=rpm_candidates,
+                min_events_for_rpm=min_events_for_rpm,
+                score_mode=score_mode,
+                score_lambda=score_lambda,
+                score_eps=score_eps,
+                max_events_mc=None,
+                downsample_time_bins=downsample_time_bins,
+                reference_time_fractions=reference_time_fractions,
+                center_search_radius_px=center_search_radius_px,
+                center_search_step_px=center_search_step_px,
+                refine=refine,
+                rpm_step_fine=rpm_step_fine,
+                rpm_refine_span=rpm_refine_span,
+                sign_lock=sign_lock,
+                candidate_chunk_size=parallel_candidate_chunk_size,
+                already_prepared=True,
+            )
+        except Exception as exc:
+            _warn_parallel_fallback(exc)
 
     reference_times_us = make_reference_times_us(t0_us, t1_us, reference_time_fractions)
     center_offsets = make_center_offsets(center_search_radius_px, center_search_step_px)
@@ -307,6 +351,8 @@ def estimate_rpm_series_for_component(
     score_eps=1e-6,
     max_events_mc=3000,
     downsample_time_bins=20,
+    parallel_mc=False,
+    parallel_candidate_chunk_size=512,
     reference_time_fractions=(0.5,),
     center_search_radius_px=0.0,
     center_search_step_px=1.0,
@@ -380,6 +426,8 @@ def estimate_rpm_series_for_component(
             score_eps=score_eps,
             max_events_mc=max_events_mc,
             downsample_time_bins=downsample_time_bins,
+            parallel_mc=parallel_mc,
+            parallel_candidate_chunk_size=parallel_candidate_chunk_size,
             reference_time_fractions=reference_time_fractions,
             center_search_radius_px=center_search_radius_px,
             center_search_step_px=center_search_step_px,
