@@ -6,9 +6,9 @@ from pipeline import run_rpm_pipeline
 
 
 EVENTS_DIR = Path("events")
-DAT_FILE = EVENTS_DIR / "30.dat"
+DAT_FILE = EVENTS_DIR / "70.dat"
 OUTPUT_DIR = Path("outputs")
-OUTPUT_CSV = OUTPUT_DIR / "rpm_results.csv"
+OUTPUT_CSV = OUTPUT_DIR / "rpm_results_70_inverse.csv"
 
 
 config = PipelineConfig(
@@ -31,7 +31,7 @@ config = PipelineConfig(
     # Filtracja gęstościowa tła
     # ============================================================
     bin_size=7,                      # Rozmiar binu przestrzennego [px]. Większy = bardziej zgrubna filtracja.
-    min_events_in_bin=3,             # Minimalna liczba eventów w binie.
+    min_events_in_bin=15,             # Minimalna liczba eventów w binie.
     density_min_component_area=18,   # Minimalny obszar składowej na masce binów.
     remove_border_components=True,   # Usuwanie komponentów dotykających brzegu obrazu.
 
@@ -39,13 +39,13 @@ config = PipelineConfig(
     # Maska ROI wirników
     # binary -> dilate -> close -> remove small -> fill holes
     # ============================================================
-    mask_dilate_kernel_size=5,       # Kernel dylatacji. Większy = mocniej skleja eventy.
+    mask_dilate_kernel_size=3,       # Kernel dylatacji. Większy = mocniej skleja eventy.
     mask_dilate_iterations=1,        # Liczba iteracji dylatacji.
-    mask_close_kernel_size=9,        # Kernel domknięcia. Większy = mocniej domyka dziury/przerwy.
+    mask_close_kernel_size=5,        # Kernel domknięcia. Większy = mocniej domyka dziury/przerwy.
     mask_close_iterations=1,         # Liczba iteracji domknięcia.
     mask_fill_holes=True,            # Wypełnianie dziur w masce.
     mask_min_component_area_px=3000, # Minimalny obszar ROI śmigła [px].
-    max_detection_components=10,     # Maks. liczba kandydatów z segmentacji.
+    max_detection_components=4,     # Maks. liczba kandydatów z segmentacji.
 
     # ============================================================
     # Tracking centroidów między oknami
@@ -64,7 +64,7 @@ config = PipelineConfig(
     rpm_refine_span=200,             # Zakres doprecyzowania wokół najlepszego coarse RPM.
     rpm_local_delta=150,             # Lokalne szukanie: prev_rpm +/- ta wartość.
     full_search_period_us=500_000,   # Co ile robić pełny search zamiast lokalnego [us].
-    min_events_for_rpm=50,           # Minimalna liczba eventów w ROI do liczenia RPM.
+    min_events_for_rpm=200,           # Minimalna liczba eventów w ROI do liczenia RPM.
 
     # ============================================================
     # Downsampling w motion compensation
@@ -81,8 +81,7 @@ config = PipelineConfig(
     # ============================================================
     # Funkcja celu
     # ============================================================
-    score_mode="mean_square",        # "mean_square" = szybka, score=mean(H^2). "eventpro" = wolniejsza z exp().
-    mc_score_lambda=1.0,             # Używane tylko dla score_mode="eventpro".
+    score_mode="inverse_occupancy",        # Dostępne: "mean_square", "variance", "inverse_occupancy", "eventpro".
     mc_score_eps=1e-6,               # Używane tylko dla score_mode="eventpro".
 
     # ============================================================

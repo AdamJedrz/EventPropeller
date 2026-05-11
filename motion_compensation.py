@@ -105,6 +105,26 @@ def mean_square_objective(hist):
     return float(np.mean(h * h))
 
 
+def variance_objective(hist):
+    if hist.sum() <= 0:
+        return -np.inf
+    h = hist.astype(np.float64)
+    return float(np.var(h))
+
+
+def inverse_occupancy_objective(hist, score_eps=1e-6):
+    if hist.sum() <= 0:
+        return -np.inf
+    h = hist.astype(np.float64)
+    occupied = np.count_nonzero(h > 0)
+    if occupied <= 0:
+        return -np.inf
+
+    # Retention-aware sparsity score: prefer fewer occupied pixels,
+    # but do not reward candidates that only reduce occupancy by losing events outside the ROI.
+    return float(h.sum() / (occupied + score_eps))
+
+
 def eventpro_objective(hist, score_lambda=1.0, score_eps=1e-6):
     h = hist.astype(np.float64)
     if h.sum() <= 0:
@@ -120,9 +140,13 @@ def eventpro_objective(hist, score_lambda=1.0, score_eps=1e-6):
 def score_histogram(hist, score_mode="mean_square", score_lambda=1.0, score_eps=1e-6):
     if score_mode == "mean_square":
         return mean_square_objective(hist)
+    if score_mode == "variance":
+        return variance_objective(hist)
+    if score_mode == "inverse_occupancy":
+        return inverse_occupancy_objective(hist, score_eps=score_eps)
     if score_mode == "eventpro":
         return eventpro_objective(hist, score_lambda=score_lambda, score_eps=score_eps)
-    raise ValueError("score_mode musi być 'mean_square' albo 'eventpro'")
+    raise ValueError("score_mode musi być jednym z: 'mean_square', 'variance', 'inverse_occupancy', 'eventpro'")
 
 
 def make_reference_times_us(t0_us, t1_us, reference_time_fractions):

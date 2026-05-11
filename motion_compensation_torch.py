@@ -132,13 +132,19 @@ def _score_candidates_torch(
             non_empty = hist.sum(dim=1) > 0
             if score_mode == "mean_square":
                 scores = (hist * hist).mean(dim=1)
+            elif score_mode == "variance":
+                scores = torch.var(hist, dim=1, unbiased=False)
+            elif score_mode == "inverse_occupancy":
+                total = hist.sum(dim=1)
+                occupied = (hist > 0).sum(dim=1).to(torch.float32)
+                scores = total / (occupied + float(score_eps))
             elif score_mode == "eventpro":
                 exp_h = torch.exp(torch.clamp(hist, 0.0, 20.0))
                 r_acc = exp_h.sum(dim=1)
                 r_spa = (1.0 / (exp_h - 1.0 + float(score_eps))).sum(dim=1)
                 scores = r_acc + float(score_lambda) * r_spa
             else:
-                raise ValueError("score_mode musi być 'mean_square' albo 'eventpro'")
+                raise ValueError("score_mode musi być jednym z: 'mean_square', 'variance', 'inverse_occupancy', 'eventpro'")
 
             scores = torch.where(non_empty, scores, torch.full_like(scores, -float("inf")))
             candidate_scores += scores
