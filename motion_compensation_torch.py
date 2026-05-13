@@ -9,6 +9,8 @@ def _nan_estimate():
         "center_y": np.nan,
         "center_dx": np.nan,
         "center_dy": np.nan,
+        "q": np.nan,
+        "q_axis_angle_deg": np.nan,
     }
 
 
@@ -37,6 +39,33 @@ def _make_center_offsets(radius_px=0.0, step_px=1.0):
     return np.asarray(offsets, dtype=np.float32)
 
 
+def _make_q_candidates(q_search_enabled=False, q_fixed=1.0, q_min=0.5, q_max=1.0, q_step=0.05):
+    if not q_search_enabled:
+        q = float(q_fixed)
+        if not np.isfinite(q) or q <= 0:
+            q = 1.0
+        return np.array([q], dtype=np.float32)
+
+    q_min = float(q_min)
+    q_max = float(q_max)
+    q_step = float(q_step)
+
+    if not np.isfinite(q_min) or not np.isfinite(q_max) or q_step <= 0:
+        raise ValueError("Niepoprawny zakres q: wymagane q_min/q_max skończone i q_step > 0")
+
+    q_min = max(1e-3, min(1.0, q_min))
+    q_max = max(1e-3, min(1.0, q_max))
+    if q_min > q_max:
+        q_min, q_max = q_max, q_min
+
+    qs = np.arange(q_min, q_max + 0.5 * q_step, q_step, dtype=np.float32)
+    qs = np.clip(qs, 1e-3, 1.0)
+    qs = np.unique(np.round(qs, 6))
+    if len(qs) == 0:
+        qs = np.array([1.0], dtype=np.float32)
+    return qs.astype(np.float32)
+
+
 def _score_candidates_torch(
     xs_np,
     ys_np,
@@ -44,6 +73,8 @@ def _score_candidates_torch(
     component,
     rpm_candidates_np,
     center_offsets_np,
+    q_candidates_np,
+    q_axis_angle_deg,
     reference_times_us,
     score_mode,
     score_lambda,
@@ -60,15 +91,18 @@ def _score_candidates_torch(
 
     rpm_candidates_np = np.asarray(rpm_candidates_np, dtype=np.float32)
     center_offsets_np = np.asarray(center_offsets_np, dtype=np.float32)
+    q_candidates_np = np.asarray(q_candidates_np, dtype=np.float32)
 
     n_rpm = len(rpm_candidates_np)
     n_center = len(center_offsets_np)
-    if n_rpm == 0 or n_center == 0 or xs.numel() == 0:
+    n_q = len(q_candidates_np)
+    if n_rpm == 0 or n_center == 0 or n_q == 0 or xs.numel() == 0:
         return _nan_estimate()
 
-    rpm_all = np.repeat(rpm_candidates_np, n_center).astype(np.float32)
-    center_dx_all = np.tile(center_offsets_np[:, 0], n_rpm).astype(np.float32)
-    center_dy_all = np.tile(center_offsets_np[:, 1], n_rpm).astype(np.float32)
+    rpm_all = np.repeat(rpm_candidates_np, n_center * n_q).astype(np.float32)
+    center_dx_all = np.tile(np.repeat(center_offsets_np[:, 0], n_q), n_rpm).astype(np.float32)
+    center_dy_all = np.tile(np.repeat(center_offsets_np[:, 1], n_q), n_rpm).astype(np.float32)
+    q_all = np.tile(q_candidates_np, n_rpm * n_center).astype(np.float32)
 
     width = int(component["bbox_w"])
     height = int(component["bbox_h"])
@@ -78,6 +112,10 @@ def _score_candidates_torch(
 
     base_cx = float(component["centroid_x"])
     base_cy = float(component["centroid_y"])
+
+    phi = np.deg2rad(float(q_axis_angle_deg))
+    cp = float(np.cos(phi))
+    sp = float(np.sin(phi))
 
     best_score = -np.inf
     best_idx_global = -1
@@ -92,6 +130,7 @@ def _score_candidates_torch(
         rpm = torch.as_tensor(rpm_all[start:end], dtype=torch.float32, device=device)
         center_dx = torch.as_tensor(center_dx_all[start:end], dtype=torch.float32, device=device)
         center_dy = torch.as_tensor(center_dy_all[start:end], dtype=torch.float32, device=device)
+        q = torch.as_tensor(q_all[start:end], dtype=torch.float32, device=device).clamp_min(1e-3)
 
         cx = base_cx + center_dx
         cy = base_cy + center_dy
@@ -103,14 +142,25 @@ def _score_candidates_torch(
             dt = (float(t_ref_us) - ts) * 1e-6
             ang = omega[:, None] * dt[None, :]
 
-            c = torch.cos(ang)
-            s = torch.sin(ang)
+            ca = torch.cos(ang)
+            sa = torch.sin(ang)
 
             dx = xs[None, :] - cx[:, None]
             dy = ys[None, :] - cy[:, None]
 
-            xw = cx[:, None] + c * dx - s * dy
-            yw = cy[:, None] + s * dx + c * dy
+            u = cp * dx + sp * dy
+            v = -sp * dx + cp * dy
+            z_x = u
+            z_y = v / q[:, None]
+
+            zr_x = ca * z_x - sa * z_y
+            zr_y = sa * z_x + ca * z_y
+
+            u2 = zr_x
+            v2 = q[:, None] * zr_y
+
+            xw = cx[:, None] + cp * u2 - sp * v2
+            yw = cy[:, None] + sp * u2 + cp * v2
 
             xi = torch.round(xw).to(torch.int64) - int(round(x0))
             yi = torch.round(yw).to(torch.int64) - int(round(y0))
@@ -164,6 +214,7 @@ def _score_candidates_torch(
     best_rpm = float(rpm_all[best_idx_global])
     best_dx = float(center_dx_all[best_idx_global])
     best_dy = float(center_dy_all[best_idx_global])
+    best_q = float(q_all[best_idx_global])
 
     return {
         "rpm": best_rpm,
@@ -172,6 +223,8 @@ def _score_candidates_torch(
         "center_y": float(base_cy + best_dy),
         "center_dx": best_dx,
         "center_dy": best_dy,
+        "q": best_q,
+        "q_axis_angle_deg": float(q_axis_angle_deg),
     }
 
 
@@ -193,6 +246,12 @@ def estimate_rpm_for_component_on_arrays_torch(
     reference_time_fractions=(0.5,),
     center_search_radius_px=0.0,
     center_search_step_px=1.0,
+    q_search_enabled=False,
+    q_fixed=1.0,
+    q_min=0.5,
+    q_max=1.0,
+    q_step=0.05,
+    q_axis_angle_deg=0.0,
     refine=False,
     rpm_step_fine=20,
     rpm_refine_span=200,
@@ -225,6 +284,13 @@ def estimate_rpm_for_component_on_arrays_torch(
 
     reference_times_us = _make_reference_times_us(t0_us, t1_us, reference_time_fractions)
     center_offsets = _make_center_offsets(center_search_radius_px, center_search_step_px)
+    q_candidates = _make_q_candidates(
+        q_search_enabled=q_search_enabled,
+        q_fixed=q_fixed,
+        q_min=q_min,
+        q_max=q_max,
+        q_step=q_step,
+    )
 
     best_result = _score_candidates_torch(
         xs_np=xs,
@@ -233,6 +299,8 @@ def estimate_rpm_for_component_on_arrays_torch(
         component=component,
         rpm_candidates_np=rpm_candidates,
         center_offsets_np=center_offsets,
+        q_candidates_np=q_candidates,
+        q_axis_angle_deg=q_axis_angle_deg,
         reference_times_us=reference_times_us,
         score_mode=score_mode,
         score_lambda=score_lambda,
@@ -269,6 +337,8 @@ def estimate_rpm_for_component_on_arrays_torch(
         component=component,
         rpm_candidates_np=fine_rpms,
         center_offsets_np=center_offsets,
+        q_candidates_np=q_candidates,
+        q_axis_angle_deg=q_axis_angle_deg,
         reference_times_us=reference_times_us,
         score_mode=score_mode,
         score_lambda=score_lambda,

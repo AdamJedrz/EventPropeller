@@ -64,7 +64,18 @@ def downsample_events_time_stratified(xs, ys, ps, ts, max_events=3000, n_time_bi
     return xs[idx], ys[idx], ps[idx], ts[idx]
 
 
-def warp_events_about_centroid(xs, ys, ts, cx, cy, omega_rad_s, t_ref_us):
+def warp_events_about_centroid(
+    xs,
+    ys,
+    ts,
+    cx,
+    cy,
+    omega_rad_s,
+    t_ref_us,
+    q=1.0,
+    q_axis_angle_rad=0.0,
+):
+
     dt = (float(t_ref_us) - ts.astype(np.float64)) * 1e-6
     ang = omega_rad_s * dt
 
@@ -74,8 +85,33 @@ def warp_events_about_centroid(xs, ys, ts, cx, cy, omega_rad_s, t_ref_us):
     c = np.cos(ang)
     s = np.sin(ang)
 
-    xw = float(cx) + c * dx - s * dy
-    yw = float(cy) + s * dx + c * dy
+    q = float(q)
+    if not np.isfinite(q) or q <= 0:
+        q = 1.0
+
+    if abs(q - 1.0) < 1e-12 and abs(float(q_axis_angle_rad)) < 1e-12:
+        xw = float(cx) + c * dx - s * dy
+        yw = float(cy) + s * dx + c * dy
+        return xw, yw
+
+    phi = float(q_axis_angle_rad)
+    cp = np.cos(phi)
+    sp = np.sin(phi)
+
+    u = cp * dx + sp * dy
+    v = -sp * dx + cp * dy
+
+    z_x = u
+    z_y = v / q
+
+    zr_x = c * z_x - s * z_y
+    zr_y = s * z_x + c * z_y
+
+    u2 = zr_x
+    v2 = q * zr_y
+
+    xw = float(cx) + cp * u2 - sp * v2
+    yw = float(cy) + sp * u2 + cp * v2
 
     return xw, yw
 
@@ -167,6 +203,33 @@ def make_center_offsets(radius_px=0.0, step_px=1.0):
     return [(float(dx), float(dy)) for dy in values for dx in values]
 
 
+def make_q_candidates(q_search_enabled=False, q_fixed=1.0, q_min=0.5, q_max=1.0, q_step=0.05):
+    if not q_search_enabled:
+        q = float(q_fixed)
+        if not np.isfinite(q) or q <= 0:
+            q = 1.0
+        return np.array([q], dtype=np.float64)
+
+    q_min = float(q_min)
+    q_max = float(q_max)
+    q_step = float(q_step)
+
+    if not np.isfinite(q_min) or not np.isfinite(q_max) or q_step <= 0:
+        raise ValueError("Niepoprawny zakres q: wymagane q_min/q_max skończone i q_step > 0")
+
+    q_min = max(1e-3, min(1.0, q_min))
+    q_max = max(1e-3, min(1.0, q_max))
+    if q_min > q_max:
+        q_min, q_max = q_max, q_min
+
+    qs = np.arange(q_min, q_max + 0.5 * q_step, q_step, dtype=np.float64)
+    qs = np.clip(qs, 1e-3, 1.0)
+    qs = np.unique(np.round(qs, 6))
+    if len(qs) == 0:
+        qs = np.array([1.0], dtype=np.float64)
+    return qs
+
+
 def score_rpm_candidate(
     xs,
     ys,
@@ -175,6 +238,8 @@ def score_rpm_candidate(
     rpm,
     reference_times_us,
     center_offsets,
+    q_candidates,
+    q_axis_angle_rad=0.0,
     score_mode="mean_square",
     score_lambda=1.0,
     score_eps=1e-6,
@@ -190,27 +255,42 @@ def score_rpm_candidate(
         "center_y": base_cy,
         "center_dx": 0.0,
         "center_dy": 0.0,
+        "q": 1.0,
+        "q_axis_angle_deg": float(np.degrees(q_axis_angle_rad)),
     }
 
     for dx, dy in center_offsets:
         cx = base_cx + dx
         cy = base_cy + dy
 
-        scores = []
-        for t_ref_us in reference_times_us:
-            xw, yw = warp_events_about_centroid(xs, ys, ts, cx, cy, omega, t_ref_us)
-            hist = build_local_histogram(xw, yw, component)
-            scores.append(score_histogram(hist, score_mode=score_mode, score_lambda=score_lambda, score_eps=score_eps))
+        for q in q_candidates:
+            scores = []
+            for t_ref_us in reference_times_us:
+                xw, yw = warp_events_about_centroid(
+                    xs,
+                    ys,
+                    ts,
+                    cx,
+                    cy,
+                    omega,
+                    t_ref_us,
+                    q=float(q),
+                    q_axis_angle_rad=q_axis_angle_rad,
+                )
+                hist = build_local_histogram(xw, yw, component)
+                scores.append(score_histogram(hist, score_mode=score_mode, score_lambda=score_lambda, score_eps=score_eps))
 
-        total_score = float(np.mean(scores))
-        if total_score > best["score"]:
-            best = {
-                "score": total_score,
-                "center_x": float(cx),
-                "center_y": float(cy),
-                "center_dx": float(dx),
-                "center_dy": float(dy),
-            }
+            total_score = float(np.mean(scores))
+            if total_score > best["score"]:
+                best = {
+                    "score": total_score,
+                    "center_x": float(cx),
+                    "center_y": float(cy),
+                    "center_dx": float(dx),
+                    "center_dy": float(dy),
+                    "q": float(q),
+                    "q_axis_angle_deg": float(np.degrees(q_axis_angle_rad)),
+                }
 
     return best
 
@@ -223,6 +303,8 @@ def _nan_estimate():
         "center_y": np.nan,
         "center_dx": np.nan,
         "center_dy": np.nan,
+        "q": np.nan,
+        "q_axis_angle_deg": np.nan,
     }
 
 
@@ -246,6 +328,12 @@ def estimate_rpm_for_component_on_arrays(
     reference_time_fractions=(0.5,),
     center_search_radius_px=0.0,
     center_search_step_px=1.0,
+    q_search_enabled=False,
+    q_fixed=1.0,
+    q_min=0.5,
+    q_max=1.0,
+    q_step=0.05,
+    q_axis_angle_deg=0.0,
     refine=False,
     rpm_step_fine=20,
     rpm_refine_span=200,
@@ -270,6 +358,15 @@ def estimate_rpm_for_component_on_arrays(
     if len(rpm_candidates) == 0:
         return _nan_estimate()
 
+    q_candidates = make_q_candidates(
+        q_search_enabled=q_search_enabled,
+        q_fixed=q_fixed,
+        q_min=q_min,
+        q_max=q_max,
+        q_step=q_step,
+    )
+    q_axis_angle_rad = np.deg2rad(float(q_axis_angle_deg))
+
     if parallel_mc:
         try:
             from motion_compensation_torch import estimate_rpm_for_component_on_arrays_torch
@@ -292,6 +389,12 @@ def estimate_rpm_for_component_on_arrays(
                 reference_time_fractions=reference_time_fractions,
                 center_search_radius_px=center_search_radius_px,
                 center_search_step_px=center_search_step_px,
+                q_search_enabled=q_search_enabled,
+                q_fixed=q_fixed,
+                q_min=q_min,
+                q_max=q_max,
+                q_step=q_step,
+                q_axis_angle_deg=q_axis_angle_deg,
                 refine=refine,
                 rpm_step_fine=rpm_step_fine,
                 rpm_refine_span=rpm_refine_span,
@@ -314,6 +417,8 @@ def estimate_rpm_for_component_on_arrays(
             rpm=rpm,
             reference_times_us=reference_times_us,
             center_offsets=center_offsets,
+            q_candidates=q_candidates,
+            q_axis_angle_rad=q_axis_angle_rad,
             score_mode=score_mode,
             score_lambda=score_lambda,
             score_eps=score_eps,
@@ -380,6 +485,12 @@ def estimate_rpm_series_for_component(
     reference_time_fractions=(0.5,),
     center_search_radius_px=0.0,
     center_search_step_px=1.0,
+    q_search_enabled=False,
+    q_fixed=1.0,
+    q_min=0.5,
+    q_max=1.0,
+    q_step=0.05,
+    q_axis_angle_deg=0.0,
 ):
     prev_rpm = track_state.get("prev_rpm", np.nan)
     locked_sign = track_state.get("locked_sign", None)
@@ -455,6 +566,12 @@ def estimate_rpm_series_for_component(
             reference_time_fractions=reference_time_fractions,
             center_search_radius_px=center_search_radius_px,
             center_search_step_px=center_search_step_px,
+            q_search_enabled=q_search_enabled,
+            q_fixed=q_fixed,
+            q_min=q_min,
+            q_max=q_max,
+            q_step=q_step,
+            q_axis_angle_deg=q_axis_angle_deg,
             refine=refine,
             rpm_step_fine=rpm_step_fine,
             rpm_refine_span=rpm_refine_span,
@@ -479,6 +596,8 @@ def estimate_rpm_series_for_component(
             "center_y": np.nan,
             "center_dx": np.nan,
             "center_dy": np.nan,
+            "q": np.nan,
+            "q_axis_angle_deg": np.nan,
             "first_bundle_estimate": None,
             "bundle_estimates": [],
         }
@@ -497,6 +616,8 @@ def estimate_rpm_series_for_component(
         "center_y": float(representative["center_y"]),
         "center_dx": float(representative["center_dx"]),
         "center_dy": float(representative["center_dy"]),
+        "q": float(representative.get("q", np.nan)),
+        "q_axis_angle_deg": float(representative.get("q_axis_angle_deg", np.nan)),
         "first_bundle_estimate": first_bundle_estimate,
         "bundle_estimates": estimates,
     }

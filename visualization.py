@@ -84,6 +84,10 @@ def draw_components_overlay(base_img, components, color=(0, 255, 0)):
             txt = f"d=({comp['optimized_center_dx']:.0f},{comp['optimized_center_dy']:.0f})"
             cv2.putText(img, txt, (x, min(img.shape[0] - 8, y + h + 16)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1, cv2.LINE_AA)
 
+        if "optimized_q" in comp:
+            txt_q = f"q={comp['optimized_q']:.2f}"
+            cv2.putText(img, txt_q, (x, min(img.shape[0] - 8, y + h + 32)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1, cv2.LINE_AA)
+
     return img
 
 
@@ -152,6 +156,8 @@ def first_bundle_warp_and_histograms(
 
         center_x = comp.get("optimized_center_x", comp["centroid_x"])
         center_y = comp.get("optimized_center_y", comp["centroid_y"])
+        q = comp.get("optimized_q", 1.0)
+        q_axis_angle_deg = comp.get("q_axis_angle_deg", 0.0)
 
         xs, ys, ps, ts = crop_events_to_component_bbox(xs_all, ys_all, ps_all, ts_all, comp)
         if len(xs) == 0:
@@ -160,7 +166,17 @@ def first_bundle_warp_and_histograms(
         omega = float(rpm) * 2.0 * np.pi / 60.0
 
         for ref_idx, t_ref_us in enumerate(reference_times):
-            xw, yw = warp_events_about_centroid(xs, ys, ts, center_x, center_y, omega, t_ref_us)
+            xw, yw = warp_events_about_centroid(
+                xs,
+                ys,
+                ts,
+                center_x,
+                center_y,
+                omega,
+                t_ref_us,
+                q=q,
+                q_axis_angle_rad=np.deg2rad(float(q_axis_angle_deg)),
+            )
             hist = build_local_histogram(xw, yw, comp)
 
             x0 = comp["bbox_x"]

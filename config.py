@@ -43,6 +43,12 @@ class PipelineConfig:
     reference_time_fractions: Tuple[float, ...] = field(default_factory=lambda: (0.5,))
     center_search_radius_px: float = 0.0
     center_search_step_px: float = 1.0
+    q_search_enabled: bool = False
+    q_fixed: float = 1.0
+    q_min: float = 0.50
+    q_max: float = 1.00
+    q_step: float = 0.05
+    q_axis_angle_deg: float = 0.0
     preview: bool = False
     preview_wait_ms: int = 1
     preview_every_n_windows: int = 1

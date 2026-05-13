@@ -229,6 +229,12 @@ def run_rpm_pipeline(dat_path, config: PipelineConfig | None = None):
                     reference_time_fractions=config.reference_time_fractions,
                     center_search_radius_px=config.center_search_radius_px,
                     center_search_step_px=config.center_search_step_px,
+                    q_search_enabled=config.q_search_enabled,
+                    q_fixed=config.q_fixed,
+                    q_min=config.q_min,
+                    q_max=config.q_max,
+                    q_step=config.q_step,
+                    q_axis_angle_deg=config.q_axis_angle_deg,
                 )
 
                 rpm = rpm_info["rpm_median"]
@@ -245,6 +251,8 @@ def run_rpm_pipeline(dat_path, config: PipelineConfig | None = None):
                     comp_for_preview["optimized_center_dy"] = float(center_est["center_dy"])
                     comp_for_preview["preview_rpm"] = float(center_est.get("rpm", rpm))
                     comp_for_preview["rpm_median"] = float(rpm) if not np.isnan(rpm) else np.nan
+                    comp_for_preview["optimized_q"] = float(center_est.get("q", config.q_fixed))
+                    comp_for_preview["q_axis_angle_deg"] = float(center_est.get("q_axis_angle_deg", config.q_axis_angle_deg))
 
                 matched_components[tid] = comp_for_preview
 
@@ -255,6 +263,8 @@ def run_rpm_pipeline(dat_path, config: PipelineConfig | None = None):
                         tracks[tid]["optimized_center_y"] = float(rpm_info["center_y"])
                         tracks[tid]["optimized_center_dx"] = float(rpm_info["center_dx"])
                         tracks[tid]["optimized_center_dy"] = float(rpm_info["center_dy"])
+                        tracks[tid]["optimized_q"] = float(rpm_info.get("q", config.q_fixed))
+                        tracks[tid]["q_axis_angle_deg"] = float(rpm_info.get("q_axis_angle_deg", config.q_axis_angle_deg))
 
                     if tracks[tid]["locked_sign"] is None and rpm != 0:
                         tracks[tid]["locked_sign"] = +1 if rpm > 0 else -1
@@ -317,6 +327,8 @@ def run_rpm_pipeline(dat_path, config: PipelineConfig | None = None):
                 "last_centroid_x": st["centroid_x"],
                 "last_centroid_y": st["centroid_y"],
                 "prev_rpm": st["prev_rpm"],
+                "optimized_q": st.get("optimized_q", np.nan),
+                "q_axis_angle_deg": st.get("q_axis_angle_deg", np.nan),
                 "locked_sign": st["locked_sign"],
                 "last_full_search_t0_us": st["last_full_search_t0_us"],
                 "missed_windows": st["missed_windows"],
@@ -331,6 +343,8 @@ def run_rpm_pipeline(dat_path, config: PipelineConfig | None = None):
                 "last_centroid_x": np.nan,
                 "last_centroid_y": np.nan,
                 "prev_rpm": np.nan,
+                "optimized_q": np.nan,
+                "q_axis_angle_deg": np.nan,
                 "locked_sign": None,
                 "last_full_search_t0_us": None,
                 "missed_windows": np.nan,
