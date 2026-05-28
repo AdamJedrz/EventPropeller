@@ -28,6 +28,51 @@ def keep_large_inner_bin_components(active_bins_mask, min_component_area=20, rem
     return out.astype(bool)
 
 
+def apply_bin_morphology(active_bins_mask, mode="none", kernel_size=3, iterations=0):
+    mode = str(mode or "none").lower()
+    iterations = int(iterations or 0)
+    kernel_size = int(kernel_size or 1)
+
+    if mode in ("none", "off", "false") or iterations <= 0 or kernel_size <= 1:
+        return active_bins_mask.astype(bool)
+
+    if mode not in ("erode", "open", "opening"):
+        raise ValueError("density_bin_morph_mode musi być jednym z: 'none', 'erode', 'open'")
+
+    mask = active_bins_mask.astype(np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+
+    if mode == "erode":
+        out = cv2.erode(mask, kernel, iterations=iterations)
+    else:
+        out = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=iterations)
+
+    return (out > 0)
+
+
+def keep_mask_from_active_bins(xs, ys, image_shape, bin_size, active_bins):
+    height, width = image_shape
+    xs = np.asarray(xs, dtype=np.int32)
+    ys = np.asarray(ys, dtype=np.int32)
+    active_bins = np.asarray(active_bins).astype(bool)
+
+    valid = (xs >= 0) & (xs < width) & (ys >= 0) & (ys < height)
+    keep_mask = np.zeros(len(xs), dtype=bool)
+
+    if not np.any(valid) or active_bins.size == 0:
+        return keep_mask
+
+    bx = xs[valid] // int(bin_size)
+    by = ys[valid] // int(bin_size)
+
+    in_bins = (by >= 0) & (by < active_bins.shape[0]) & (bx >= 0) & (bx < active_bins.shape[1])
+    keep_valid = np.zeros(np.count_nonzero(valid), dtype=bool)
+    keep_valid[in_bins] = active_bins[by[in_bins], bx[in_bins]]
+    keep_mask[valid] = keep_valid
+
+    return keep_mask
+
+
 def density_filter_events(
     xs,
     ys,
@@ -62,8 +107,7 @@ def density_filter_events(
         remove_border_components=remove_border_components,
     )
 
-    keep_mask = np.zeros(len(xs), dtype=bool)
-    keep_mask[valid] = active_bins[by, bx]
+    keep_mask = keep_mask_from_active_bins(xs, ys, image_shape, bin_size, active_bins)
 
     if return_active_bins:
         return keep_mask, active_bins

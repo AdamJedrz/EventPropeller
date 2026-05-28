@@ -69,11 +69,9 @@ def draw_components_overlay(base_img, components, color=(0, 255, 0)):
 
         cv2.rectangle(img, (x, y), (x + w - 1, y + h - 1), color, 2)
 
-        # centroid z maski/segmentacji
         cv2.circle(img, (cx, cy), 7, (255, 255, 255), -1)
         cv2.circle(img, (cx, cy), 9, (0, 0, 255), 2)
 
-        # optymalny środek obrotu użyty do warpingu
         cv2.drawMarker(img, (ox, oy), (255, 255, 0), markerType=cv2.MARKER_CROSS, markerSize=18, thickness=2)
         cv2.circle(img, (ox, oy), 6, (255, 255, 0), -1)
         cv2.circle(img, (ox, oy), 9, (255, 0, 0), 2)
@@ -87,6 +85,10 @@ def draw_components_overlay(base_img, components, color=(0, 255, 0)):
         if "optimized_q" in comp:
             txt_q = f"q={comp['optimized_q']:.2f}"
             cv2.putText(img, txt_q, (x, min(img.shape[0] - 8, y + h + 32)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1, cv2.LINE_AA)
+
+        if "q_axis_angle_deg" in comp:
+            txt_a = f"a={comp['q_axis_angle_deg']:.0f}deg"
+            cv2.putText(img, txt_a, (x, min(img.shape[0] - 8, y + h + 48)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1, cv2.LINE_AA)
 
     return img
 
@@ -117,6 +119,18 @@ def hist_to_colormap(full_hist, image_shape):
     vis = (255.0 * vis / vis.max()).astype(np.uint8)
     return cv2.applyColorMap(vis, cv2.COLORMAP_TURBO)
 
+
+
+def first_bundle_before_warp_overlay(
+    first_bundle,
+    image_shape,
+    matched_components,
+    polarity_mode,
+):
+    xs, ys, ps, _ = select_events_by_polarity(first_bundle["events"], polarity_mode)
+    img = draw_events_gray(xs, ys, ps, image_shape)
+    components = components_from_matched(matched_components)
+    return draw_components_overlay(img, components)
 
 def first_bundle_warp_and_histograms(
     first_bundle,
@@ -215,6 +229,46 @@ def first_bundle_warp_and_histograms(
     return warped_overlay, hist_overlays
 
 
+def draw_events_from_mask(xs, ys, ps, keep_mask, image_shape):
+    keep_mask = np.asarray(keep_mask, dtype=bool)
+    if len(keep_mask) != len(xs):
+        return np.full(image_shape, 127, dtype=np.uint8)
+    return draw_events_gray(xs[keep_mask], ys[keep_mask], ps[keep_mask], image_shape)
+
+
+def draw_cluster_debug(cluster_debug, image_shape):
+    height, width = image_shape
+    img = np.full((height, width, 3), 35, dtype=np.uint8)
+
+    cluster_debug = cluster_debug or {}
+
+    ax = np.asarray(cluster_debug.get("assigned_xs", []), dtype=np.int32)
+    ay = np.asarray(cluster_debug.get("assigned_ys", []), dtype=np.int32)
+    labels = np.asarray(cluster_debug.get("assigned_labels", []), dtype=np.int32)
+
+    colors = [
+        (0, 255, 0),      # green
+        (0, 180, 255),    # orange
+        (255, 0, 255),    # magenta
+        (255, 180, 0),    # cyan-ish
+        (0, 0, 255),      # red
+        (255, 0, 0),      # blue
+        (180, 255, 0),
+        (180, 0, 255),
+    ]
+
+    n = min(len(ax), len(ay), len(labels))
+    ax = ax[:n]
+    ay = ay[:n]
+    labels = labels[:n]
+    valid_a = (ax >= 0) & (ax < width) & (ay >= 0) & (ay < height) & (labels >= 0)
+    for lab in np.unique(labels[valid_a]):
+        idx = valid_a & (labels == lab)
+        img[ay[idx], ax[idx]] = colors[int(lab) % len(colors)]
+
+    return img
+
+
 def build_preview_images(
     window_dict,
     process_result,
@@ -229,21 +283,43 @@ def build_preview_images(
     rpm_by_track = rpm_by_track or {}
 
     xs, ys, ps, _ = select_events_by_polarity(window_dict["events"], polarity_mode)
+
     raw_img = draw_events_gray(xs, ys, ps, image_shape)
 
-    keep_mask = density_filter_events(xs, ys, image_shape=image_shape, **(filter_params or {}))
-    filtered_img = draw_events_gray(xs[keep_mask], ys[keep_mask], ps[keep_mask], image_shape)
-    filtered_overlay = draw_components_overlay(filtered_img, process_result["components"])
-    closed_overlay = draw_components_overlay(draw_mask_yellow(process_result["closed_mask"]), process_result["components"])
+    density_img = draw_events_from_mask(
+        xs,
+        ys,
+        ps,
+        process_result.get("density_keep_mask", np.zeros(len(xs), dtype=bool)),
+        image_shape,
+    )
+    density_overlay = draw_components_overlay(density_img, process_result.get("components", []))
+
+    precluster_img = draw_events_from_mask(
+        xs,
+        ys,
+        ps,
+        process_result.get("precluster_keep_mask", process_result.get("density_keep_mask", np.zeros(len(xs), dtype=bool))),
+        image_shape,
+    )
+    precluster_overlay = draw_components_overlay(precluster_img, process_result.get("components", []))
+
+    cluster_img = draw_cluster_debug(process_result.get("cluster_debug", {}), image_shape)
+    cluster_overlay = draw_components_overlay(cluster_img, process_result.get("components", []))
 
     first_bundle = window_dict["bundles"][0]
-    components_for_first = components_from_matched(matched_components) if matched_components else process_result["components"]
-    first_filtered = first_bundle_filtered(first_bundle, image_shape, components_for_first, polarity_mode, filter_params)
 
     if not matched_components:
-        matched_components = {i: comp for i, comp in enumerate(process_result["components"])}
+        matched_components = {i: comp for i, comp in enumerate(process_result.get("components", []))}
         for i in matched_components:
             rpm_by_track.setdefault(i, 0.0)
+
+    first_before_warp = first_bundle_before_warp_overlay(
+        first_bundle=first_bundle,
+        image_shape=image_shape,
+        matched_components=matched_components,
+        polarity_mode=polarity_mode,
+    )
 
     first_warped, first_histograms = first_bundle_warp_and_histograms(
         first_bundle=first_bundle,
@@ -256,9 +332,10 @@ def build_preview_images(
 
     return {
         "raw_img": raw_img,
-        "filtered_overlay": filtered_overlay,
-        "closed_overlay": closed_overlay,
-        "first_bundle_filtered_overlay": first_filtered,
+        "density_overlay": density_overlay,
+        "precluster_overlay": precluster_overlay,
+        "cluster_overlay": cluster_overlay,
+        "first_bundle_before_warp_overlay": first_before_warp,
         "first_bundle_warped_overlay": first_warped,
         "first_bundle_histograms": first_histograms,
     }
@@ -286,16 +363,42 @@ def show_preview(
         reference_time_fractions=reference_time_fractions,
     )
 
-    cv2.imshow("1_All_events_window", resize_for_screen(add_title_bar(imgs["raw_img"], f"1. Wszystkie eventy | window={process_result['window_idx']} | N={process_result['n_events_raw']}")))
-    cv2.imshow("2_Filtered_window", resize_for_screen(add_title_bar(imgs["filtered_overlay"], f"2. Po filtracji + komponenty | N={process_result['n_events_filtered']} | C={len(process_result['components'])}")))
-    cv2.imshow("3_Closed_mask_window", resize_for_screen(add_title_bar(imgs["closed_overlay"], f"3. Maska ROI + komponenty | C={len(process_result['components'])}")))
-    cv2.imshow("4_First_bundle_filtered", resize_for_screen(add_title_bar(imgs["first_bundle_filtered_overlay"], "4. Pierwszy bundle po filtracji")))
-    cv2.imshow("5_First_bundle_warped_middle", resize_for_screen(add_title_bar(imgs["first_bundle_warped_overlay"], "5. Pierwszy bundle po warpingu do ref ~0.5")))
+    n_raw = int(process_result.get("n_events_raw", 0))
+    n_density = int(process_result.get("n_events_filtered", 0))
+    n_precluster = int(process_result.get("n_events_precluster", 0))
+    n_clustered = int(process_result.get("n_events_clustered", 0))
+    n_unassigned = int(process_result.get("n_events_unassigned", 0))
+    n_components = len(process_result.get("components", []))
+
+    cv2.imshow(
+        "1_All_events_window",
+        resize_for_screen(add_title_bar(imgs["raw_img"], f"1. Wszystkie eventy | window={process_result['window_idx']} | N={n_raw}")),
+    )
+    cv2.imshow(
+        "2_Density_filtered_window",
+        resize_for_screen(add_title_bar(imgs["density_overlay"], f"2. Po filtracji gęstościowej | N={n_density}")),
+    )
+    cv2.imshow(
+        "3_Precluster_events_window",
+        resize_for_screen(add_title_bar(imgs["precluster_overlay"], f"3. Po morfologii binów / przed klasteryzacją | N={n_precluster}")),
+    )
+    cv2.imshow(
+        "4_Event_clustering_window",
+        resize_for_screen(add_title_bar(imgs["cluster_overlay"], f"4. Klasteryzacja eventów | C={n_components} | assigned={n_clustered} | white={n_unassigned}")),
+    )
+    cv2.imshow(
+        "5_First_bundle_before_warp",
+        resize_for_screen(add_title_bar(imgs["first_bundle_before_warp_overlay"], "5. Pierwszy bundle przed warpingiem")),
+    )
+    cv2.imshow(
+        "6_First_bundle_warped_middle",
+        resize_for_screen(add_title_bar(imgs["first_bundle_warped_overlay"], "6. Pierwszy bundle po warpingu do ref ~0.5")),
+    )
 
     for i, (frac, hist_img) in enumerate(imgs["first_bundle_histograms"], start=1):
         cv2.imshow(
-            f"6{i}_First_bundle_hist_ref_{frac:.2f}",
-            resize_for_screen(add_title_bar(hist_img, f"6.{i} Histogram warped events | ref fraction={frac:.2f}")),
+            f"7{i}_First_bundle_hist_ref_{frac:.2f}",
+            resize_for_screen(add_title_bar(hist_img, f"7.{i} Histogram warped events | ref fraction={frac:.2f}")),
         )
 
     key = cv2.waitKey(wait_ms) & 0xFF

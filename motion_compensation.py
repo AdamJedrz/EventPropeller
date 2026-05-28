@@ -89,12 +89,12 @@ def warp_events_about_centroid(
     if not np.isfinite(q) or q <= 0:
         q = 1.0
 
-    if abs(q - 1.0) < 1e-12 and abs(float(q_axis_angle_rad)) < 1e-12:
+    phi = float(q_axis_angle_rad)
+    if abs(q - 1.0) < 1e-12:
         xw = float(cx) + c * dx - s * dy
         yw = float(cy) + s * dx + c * dy
         return xw, yw
 
-    phi = float(q_axis_angle_rad)
     cp = np.cos(phi)
     sp = np.sin(phi)
 
@@ -155,9 +155,6 @@ def inverse_occupancy_objective(hist, score_eps=1e-6):
     occupied = np.count_nonzero(h > 0)
     if occupied <= 0:
         return -np.inf
-
-    # Retention-aware sparsity score: prefer fewer occupied pixels,
-    # but do not reward candidates that only reduce occupancy by losing events outside the ROI.
     return float(h.sum() / (occupied + score_eps))
 
 
@@ -230,6 +227,38 @@ def make_q_candidates(q_search_enabled=False, q_fixed=1.0, q_min=0.5, q_max=1.0,
     return qs
 
 
+def make_q_axis_angle_candidates(
+    q_axis_search_enabled=False,
+    q_axis_angle_deg=0.0,
+    q_axis_angle_min_deg=0.0,
+    q_axis_angle_max_deg=165.0,
+    q_axis_angle_step_deg=15.0,
+):
+    if not q_axis_search_enabled:
+        a = float(q_axis_angle_deg)
+        if not np.isfinite(a):
+            a = 0.0
+        return np.array([a % 180.0], dtype=np.float64)
+
+    a_min = float(q_axis_angle_min_deg)
+    a_max = float(q_axis_angle_max_deg)
+    a_step = float(q_axis_angle_step_deg)
+
+    if not np.isfinite(a_min) or not np.isfinite(a_max) or a_step <= 0:
+        raise ValueError("Niepoprawny zakres q_axis_angle: wymagane min/max skończone i step > 0")
+
+    if a_min > a_max:
+        a_min, a_max = a_max, a_min
+
+    angles = np.arange(a_min, a_max + 0.5 * a_step, a_step, dtype=np.float64)
+    angles = np.mod(angles, 180.0)
+    angles = np.unique(np.round(angles, 6))
+    angles.sort()
+    if len(angles) == 0:
+        angles = np.array([0.0], dtype=np.float64)
+    return angles
+
+
 def score_rpm_candidate(
     xs,
     ys,
@@ -239,7 +268,7 @@ def score_rpm_candidate(
     reference_times_us,
     center_offsets,
     q_candidates,
-    q_axis_angle_rad=0.0,
+    q_axis_angle_candidates_deg,
     score_mode="mean_square",
     score_lambda=1.0,
     score_eps=1e-6,
@@ -255,8 +284,8 @@ def score_rpm_candidate(
         "center_y": base_cy,
         "center_dx": 0.0,
         "center_dy": 0.0,
-        "q": 1.0,
-        "q_axis_angle_deg": float(np.degrees(q_axis_angle_rad)),
+        "q": np.nan,
+        "q_axis_angle_deg": np.nan,
     }
 
     for dx, dy in center_offsets:
@@ -264,33 +293,37 @@ def score_rpm_candidate(
         cy = base_cy + dy
 
         for q in q_candidates:
-            scores = []
-            for t_ref_us in reference_times_us:
-                xw, yw = warp_events_about_centroid(
-                    xs,
-                    ys,
-                    ts,
-                    cx,
-                    cy,
-                    omega,
-                    t_ref_us,
-                    q=float(q),
-                    q_axis_angle_rad=q_axis_angle_rad,
-                )
-                hist = build_local_histogram(xw, yw, component)
-                scores.append(score_histogram(hist, score_mode=score_mode, score_lambda=score_lambda, score_eps=score_eps))
+            angle_candidates = q_axis_angle_candidates_deg[:1] if abs(float(q) - 1.0) < 1e-12 else q_axis_angle_candidates_deg
 
-            total_score = float(np.mean(scores))
-            if total_score > best["score"]:
-                best = {
-                    "score": total_score,
-                    "center_x": float(cx),
-                    "center_y": float(cy),
-                    "center_dx": float(dx),
-                    "center_dy": float(dy),
-                    "q": float(q),
-                    "q_axis_angle_deg": float(np.degrees(q_axis_angle_rad)),
-                }
+            for angle_deg in angle_candidates:
+                q_axis_angle_rad = np.deg2rad(float(angle_deg))
+                scores = []
+                for t_ref_us in reference_times_us:
+                    xw, yw = warp_events_about_centroid(
+                        xs,
+                        ys,
+                        ts,
+                        cx,
+                        cy,
+                        omega,
+                        t_ref_us,
+                        q=float(q),
+                        q_axis_angle_rad=q_axis_angle_rad,
+                    )
+                    hist = build_local_histogram(xw, yw, component)
+                    scores.append(score_histogram(hist, score_mode=score_mode, score_lambda=score_lambda, score_eps=score_eps))
+
+                total_score = float(np.mean(scores))
+                if total_score > best["score"]:
+                    best = {
+                        "score": total_score,
+                        "center_x": float(cx),
+                        "center_y": float(cy),
+                        "center_dx": float(dx),
+                        "center_dy": float(dy),
+                        "q": float(q),
+                        "q_axis_angle_deg": float(angle_deg),
+                    }
 
     return best
 
@@ -334,6 +367,10 @@ def estimate_rpm_for_component_on_arrays(
     q_max=1.0,
     q_step=0.05,
     q_axis_angle_deg=0.0,
+    q_axis_search_enabled=False,
+    q_axis_angle_min_deg=0.0,
+    q_axis_angle_max_deg=165.0,
+    q_axis_angle_step_deg=15.0,
     refine=False,
     rpm_step_fine=20,
     rpm_refine_span=200,
@@ -365,7 +402,13 @@ def estimate_rpm_for_component_on_arrays(
         q_max=q_max,
         q_step=q_step,
     )
-    q_axis_angle_rad = np.deg2rad(float(q_axis_angle_deg))
+    q_axis_angle_candidates_deg = make_q_axis_angle_candidates(
+        q_axis_search_enabled=q_axis_search_enabled,
+        q_axis_angle_deg=q_axis_angle_deg,
+        q_axis_angle_min_deg=q_axis_angle_min_deg,
+        q_axis_angle_max_deg=q_axis_angle_max_deg,
+        q_axis_angle_step_deg=q_axis_angle_step_deg,
+    )
 
     if parallel_mc:
         try:
@@ -395,6 +438,10 @@ def estimate_rpm_for_component_on_arrays(
                 q_max=q_max,
                 q_step=q_step,
                 q_axis_angle_deg=q_axis_angle_deg,
+                q_axis_search_enabled=q_axis_search_enabled,
+                q_axis_angle_min_deg=q_axis_angle_min_deg,
+                q_axis_angle_max_deg=q_axis_angle_max_deg,
+                q_axis_angle_step_deg=q_axis_angle_step_deg,
                 refine=refine,
                 rpm_step_fine=rpm_step_fine,
                 rpm_refine_span=rpm_refine_span,
@@ -418,7 +465,7 @@ def estimate_rpm_for_component_on_arrays(
             reference_times_us=reference_times_us,
             center_offsets=center_offsets,
             q_candidates=q_candidates,
-            q_axis_angle_rad=q_axis_angle_rad,
+            q_axis_angle_candidates_deg=q_axis_angle_candidates_deg,
             score_mode=score_mode,
             score_lambda=score_lambda,
             score_eps=score_eps,
@@ -491,6 +538,10 @@ def estimate_rpm_series_for_component(
     q_max=1.0,
     q_step=0.05,
     q_axis_angle_deg=0.0,
+    q_axis_search_enabled=False,
+    q_axis_angle_min_deg=0.0,
+    q_axis_angle_max_deg=165.0,
+    q_axis_angle_step_deg=15.0,
 ):
     prev_rpm = track_state.get("prev_rpm", np.nan)
     locked_sign = track_state.get("locked_sign", None)
@@ -572,6 +623,10 @@ def estimate_rpm_series_for_component(
             q_max=q_max,
             q_step=q_step,
             q_axis_angle_deg=q_axis_angle_deg,
+            q_axis_search_enabled=q_axis_search_enabled,
+            q_axis_angle_min_deg=q_axis_angle_min_deg,
+            q_axis_angle_max_deg=q_axis_angle_max_deg,
+            q_axis_angle_step_deg=q_axis_angle_step_deg,
             refine=refine,
             rpm_step_fine=rpm_step_fine,
             rpm_refine_span=rpm_refine_span,
