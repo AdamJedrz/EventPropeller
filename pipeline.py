@@ -161,6 +161,7 @@ def run_rpm_pipeline(dat_path, config: PipelineConfig | None = None):
                 start_time_ms=config.start_time_ms,
             )
         ):
+            
             result = process_window(window_dict=window_dict, image_shape=image_shape, config=config)
 
             row = {"window_idx": result["window_idx"]}
